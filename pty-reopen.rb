@@ -3,94 +3,125 @@ require 'io/console'
 
 args = ARGV.clone
 
-def in_pty
-  master, slave = PTY.open
-  err = nil
+class BlockPty
+  attr_reader :controller, :device
 
-  orig_stdout = $stdout.clone
-  orig_stderr = $stderr.clone
-  orig_stdin = $stdin.clone
-  $stdout.reopen(slave)
-  $stderr.reopen(slave)
-  $stdin.reopen(slave)
-
-  begin
-    yield master
-  # With the pipes all fucked up, apparently Ruby won't actually exit on exceptions!
-  # Rescue _everything_ here, and we'll re-raise correctly in the ensure block once the pipes are
-  # back.
-  rescue Exception => e
-    err = e
+  def initialize(controller, device, &block)
+    @controller = controller
+    @device = device
+    @block = block
   end
-ensure
-  $stdout.reopen(orig_stdout)
-  $stderr.reopen(orig_stderr)
-  $stdin.reopen(orig_stdin)
-  slave.close
 
-  raise err unless err.nil?
+  def call
+    err = nil
+    out = nil
 
-  lines = []
-  begin
-    loop do
-      ready, _, _ = IO.select([master])
-      output = ready.first.read_nonblock(1024)
-      saw_return = false
-      output.each_char do |ascii_char|
-        char = ascii_char.force_encoding('utf-8')
+    orig_stdout = $stdout.clone
+    orig_stderr = $stderr.clone
+    orig_stdin = $stdin.clone
+    $stdout.reopen(device)
+    $stderr.reopen(device)
+    $stdin.reopen(device)
 
-        curr_line = lines[lines.length - 1]
-        if curr_line.nil?
-          curr_line = ''
-          lines << curr_line
-        end
-
-        if char == "\n"
-          lines << ""
-        elsif char != "\r"
-          if saw_return
-            lines << ''
-          end
-          lines[lines.length - 1] = curr_line + char
-        end
-
-        if char == "\r"
-          saw_return = true
-        else
-          saw_return = false
-        end
-      end
+    begin
+      out = @block.call(self)
+    # With the pipes all fucked up, apparently Ruby won't actually exit on exceptions!
+    # Rescue _everything_ here, and we'll re-raise correctly in the ensure block once the pipes are
+    # back.
+    rescue Exception => e
+      err = e
     end
-  rescue Errno::EIO => e
-    # This breaks the loop
-    # It's thrown when the master reaches end of input
-    # God knows why EOF doesn't work
+  ensure
+    $stdout.reopen(orig_stdout)
+    $stderr.reopen(orig_stderr)
+    $stdin.reopen(orig_stdin)
+
+    raise err unless err.nil?
+    return out
   end
 
-  master.close
+  def close_device
+    device.close
+  end
 
-  return lines
+  def close_controller
+    controller.close
+  end
+
+  class << self
+    def in_pty(&block)
+      controller, device = PTY.open
+      self.new(controller, device, &block)
+    end
+
+    def get_lines(pty)
+      lines = []
+      begin
+        loop do
+          ready, _, _ = IO.select([pty.controller])
+          output = ready.first.read_nonblock(1024)
+          saw_return = false
+          output.each_char do |ascii_char|
+            char = ascii_char.force_encoding('utf-8')
+
+            curr_line = lines[lines.length - 1]
+            if curr_line.nil?
+              curr_line = ''
+              lines << curr_line
+            end
+
+            if char == "\n"
+              lines << ""
+            elsif char != "\r"
+              if saw_return
+                lines << ''
+              end
+              lines[lines.length - 1] = curr_line + char
+            end
+
+            if char == "\r"
+              saw_return = true
+            else
+              saw_return = false
+            end
+          end
+        end
+      rescue Errno::EIO => e
+        # This breaks the loop
+        # It's thrown when the controller reaches end of input
+        # God knows why EOF doesn't work
+      end
+
+      lines
+    end
+  end
 end
 
-def enqueue_stdin(master, str)
+def enqueue_stdin(pty_block, str)
   # turn off echo before writing to pipe, or else you'll get the str in the log. grab the current
   # stty settings and reuse them, in case the tty already had echo turned off.
+  # apparently there's no read accessor on $stdin.echo, so this works around that
   current_stty = `stty -g`
   system("stty -echo")
-  master.puts(str)
+  pty_block.controller.puts(str)
   system("stty #{current_stty}")
 end
 
-lines = in_pty do |master|
+pty_block = BlockPty.in_pty do |pty_block|
   puts "hi"
   system("echo 'echoed'")
   system("cat #{__FILE__}")
 
-  enqueue_stdin(master, "yo")
+  enqueue_stdin(pty_block, "yo")
 
   input = $stdin.gets.chomp
   puts "\nfound input: #{input}"
 end
+
+pty_block.()
+pty_block.close_device
+lines = BlockPty.get_lines(pty_block)
+pty_block.close_controller
 
 # Got all the PTY data! Everything from here on down is UI rendering code
 _, console_width = IO.console.winsize
