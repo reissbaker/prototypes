@@ -6,6 +6,8 @@ require 'io/console'
 # before doing anything, jump to last pos (offset by newline count)
 # make sure all input happens thru yr cursor tracking class
 #
+# nah fuck that: set your stdin to disable echo when you're not explicitly asking for input
+#
 # crazy TUI idea: floating window on the bottom. logs flow down normally with full scrollback;
 # floating window gets continually erased before new logs are printed, then redrawn after.
 class Cursor
