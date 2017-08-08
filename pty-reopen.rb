@@ -71,27 +71,8 @@ class BlockPty
   end
 
   def close
-    output = nil
-
-    platform(:mac) do
-      begin
-        output = yield
-      ensure
-        close_device
-        close_controller
-      end
-    end
-
-    platform(:linux) do
-      begin
-        close_device
-        output = yield
-      ensure
-        close_controller
-      end
-    end
-
-    output
+    close_device
+    close_controller
   end
 
   class << self
@@ -102,38 +83,23 @@ class BlockPty
 
     def get_lines(pty)
       lines = []
-
       begin_buffer
 
-      platform(:mac) do
-        begin
-          pty.device.flush
-          while output = pty.controller.read_nonblock(1024)
-            buffer_output(lines, output)
-          end
-        rescue IO::EAGAINWaitReadable => e
-          # We've hit the end of the stream
-          # Weirdly, closing the device first causes reads from the master to return nothing
-          # Closing both after (which we do, to work around this bug) means the master never sees
-          # the EOF (since we never send one), so we have to assume that hitting the end of the
-          # stream means that no more data will come. We flush the device before running this to try
-          # to ensure that this is true.
+      begin
+        pty.device.flush
+        pty.controller.flush
+        while output = pty.controller.read_nonblock(1024)
+          buffer_output(lines, output)
         end
+      rescue IO::EAGAINWaitReadable => e
+        # We've hit the end of the stream
+        # Weirdly, closing the device first causes reads from the master to return nothing
+        # Closing both after (which we do, to work around this bug) means the master never sees
+        # the EOF (since we never send one), so we have to assume that hitting the end of the
+        # stream means that no more data will come. We flush the device before running this to try
+        # to ensure that this is true.
       end
 
-      platform(:linux) do
-        begin
-          loop do
-            ready, _, _ = IO.select([pty.controller])
-            output = ready.first.read_nonblock(1024)
-            buffer_output(lines, output)
-          end
-        rescue Errno::EIO => e
-          # This breaks the loop
-          # It's thrown when the controller reaches end of input
-          # God knows why EOF doesn't work
-        end
-      end
 
       lines
     end
@@ -206,9 +172,8 @@ pty_block = BlockPty.in_pty do |pty_block|
 
   inner_pty.()
   puts "ran successfully. printing...\n\n"
-  lines = inner_pty.close do
-    BlockPty.get_lines(inner_pty)
-  end
+  lines = BlockPty.get_lines(inner_pty)
+  inner_pty.close
 
   lines.each_with_index do |line, index|
     puts "    #{(index + 1).to_s.rjust(Math.log10(lines.length).ceil)}: #{line}"
@@ -223,9 +188,8 @@ pty_block = BlockPty.in_pty do |pty_block|
 end
 
 pty_block.()
-lines = pty_block.close do
-  BlockPty.get_lines(pty_block)
-end
+lines = BlockPty.get_lines(pty_block)
+pty_block.close
 
 # Got all the PTY data! Everything from here on down is UI rendering code
 _, console_width = IO.console.winsize
