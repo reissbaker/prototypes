@@ -3,6 +3,18 @@ require 'io/console'
 
 args = ARGV.clone
 
+def platform(name_sym)
+  platform = RUBY_PLATFORM
+  case
+  when platform.match(/linux/)
+    yield if name_sym == :linux
+  when platform.match(/darwin/)
+    yield if name_sym == :mac
+  else
+    raise 'unknown platform semantics'
+  end
+end
+
 class BlockPty
   attr_reader :controller, :device
 
@@ -10,13 +22,22 @@ class BlockPty
     @controller = controller
     @device = device
     @block = block
+    @orig_stdout = nil
+  end
+
+  def real_puts(str)
+    if @orig_stdout.nil?
+      $stdout.puts(str)
+    else
+      @orig_stdout.puts(str)
+    end
   end
 
   def call
     err = nil
     out = nil
 
-    orig_stdout = $stdout.clone
+    @orig_stdout = $stdout.clone
     orig_stderr = $stderr.clone
     orig_stdin = $stdin.clone
     $stdout.reopen(device)
@@ -32,9 +53,10 @@ class BlockPty
       err = e
     end
   ensure
-    $stdout.reopen(orig_stdout)
+    $stdout.reopen(@orig_stdout)
     $stderr.reopen(orig_stderr)
     $stdin.reopen(orig_stdin)
+    @orig_stdout = nil
 
     raise err unless err.nil?
     return out
@@ -48,6 +70,30 @@ class BlockPty
     controller.close
   end
 
+  def close
+    output = nil
+
+    platform(:mac) do
+      begin
+        output = yield
+      ensure
+        close_device
+        close_controller
+      end
+    end
+
+    platform(:linux) do
+      begin
+        close_device
+        output = yield
+      ensure
+        close_controller
+      end
+    end
+
+    output
+  end
+
   class << self
     def in_pty(&block)
       controller, device = PTY.open
@@ -56,43 +102,71 @@ class BlockPty
 
     def get_lines(pty)
       lines = []
-      begin
-        loop do
-          ready, _, _ = IO.select([pty.controller])
-          output = ready.first.read_nonblock(1024)
-          saw_return = false
-          output.each_char do |ascii_char|
-            char = ascii_char.force_encoding('utf-8')
 
-            curr_line = lines[lines.length - 1]
-            if curr_line.nil?
-              curr_line = ''
-              lines << curr_line
-            end
+      begin_buffer
 
-            if char == "\n"
-              lines << ""
-            elsif char != "\r"
-              if saw_return
-                lines << ''
-              end
-              lines[lines.length - 1] = curr_line + char
-            end
-
-            if char == "\r"
-              saw_return = true
-            else
-              saw_return = false
-            end
+      platform(:mac) do
+        begin
+          pty.device.flush
+          while output = pty.controller.read_nonblock(1024)
+            buffer_output(lines, output)
           end
+        rescue IO::EAGAINWaitReadable => e
+          # We've hit the end of the stream
+          # Weirdly, closing the device first causes reads from the master to return nothing
+          # Closing both after (which we do, to work around this bug) means the master never sees
+          # the EOF (since we never send one), so we have to assume that hitting the end of the
+          # stream means that no more data will come. We flush the device before running this to try
+          # to ensure that this is true.
         end
-      rescue Errno::EIO => e
-        # This breaks the loop
-        # It's thrown when the controller reaches end of input
-        # God knows why EOF doesn't work
+      end
+
+      platform(:linux) do
+        begin
+          loop do
+            ready, _, _ = IO.select([pty.controller])
+            output = ready.first.read_nonblock(1024)
+            buffer_output(lines, output)
+          end
+        rescue Errno::EIO => e
+          # This breaks the loop
+          # It's thrown when the controller reaches end of input
+          # God knows why EOF doesn't work
+        end
       end
 
       lines
+    end
+
+    private
+    def begin_buffer
+      @saw_return = false
+    end
+    def buffer_output(lines, output)
+      output.each_char do |ascii_char|
+        char = ascii_char.force_encoding('utf-8')
+
+        curr_line = lines[lines.length - 1]
+        if curr_line.nil?
+          curr_line = ''
+          lines << curr_line
+        end
+
+        if char == "\n"
+          lines << ""
+        elsif char != "\r"
+          if @saw_return
+            lines << ''
+          end
+          lines[lines.length - 1] = curr_line + char
+        end
+
+        if char == "\r"
+          @saw_return = true
+        else
+          @saw_return = false
+        end
+      end
     end
   end
 end
@@ -100,34 +174,64 @@ end
 def enqueue_stdin(pty_block, str)
   # turn off echo before writing to pipe, or else you'll get the str in the log. grab the current
   # stty settings and reuse them, in case the tty already had echo turned off.
-  # apparently there's no read accessor on $stdin.echo, so this works around that
+  # apparently $stdin.echo? blocks on macOS, so this is a workaround around that
   current_stty = `stty -g`
   system("stty -echo")
   pty_block.controller.puts(str)
   system("stty #{current_stty}")
 end
 
+def print_command(cmd)
+  puts "> #{cmd}"
+end
+
+def run_command(cmd)
+  print_command(cmd)
+  system(cmd)
+end
+
 pty_block = BlockPty.in_pty do |pty_block|
-  puts "hi"
-  system("echo 'echoed'")
-  system("cat #{__FILE__}")
+  puts "hi\n\n"
+  run_command("echo 'echoed'")
+  cmd = "cat ./ruby-fd-debug.rb"
+
+  puts "\nlet's run some shit in an inner pty and do some crazy formatting. we will run:"
+  print_command(cmd)
+  puts "running..."
+
+  # nested!!!
+  inner_pty = BlockPty.in_pty do
+    system(cmd)
+  end
+
+  inner_pty.()
+  puts "ran successfully. printing...\n\n"
+  lines = inner_pty.close do
+    BlockPty.get_lines(inner_pty)
+  end
+
+  lines.each_with_index do |line, index|
+    puts "    #{(index + 1).to_s.rjust(Math.log10(lines.length).ceil)}: #{line}"
+  end
+
+  puts "\n\nlet's write some fake input to the controller and read it back from $stdin"
 
   enqueue_stdin(pty_block, "yo")
 
   input = $stdin.gets.chomp
-  puts "\nfound input: #{input}"
+  puts "found input: #{input}"
 end
 
 pty_block.()
-pty_block.close_device
-lines = BlockPty.get_lines(pty_block)
-pty_block.close_controller
+lines = pty_block.close do
+  BlockPty.get_lines(pty_block)
+end
 
 # Got all the PTY data! Everything from here on down is UI rendering code
 _, console_width = IO.console.winsize
 HORIZ_MARGIN = 1
 VERT_MARGIN = 1
-MAX_WIDTH = 80
+MAX_WIDTH = 60
 MIN_WIDTH = console_width - (HORIZ_MARGIN * 2)
 WIDTH = [ MAX_WIDTH, MIN_WIDTH ].min
 HEIGHT = args.first.to_i
