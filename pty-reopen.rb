@@ -3,18 +3,6 @@ require 'io/console'
 
 args = ARGV.clone
 
-def platform(name_sym)
-  platform = RUBY_PLATFORM
-  case
-  when platform.match(/linux/)
-    yield if name_sym == :linux
-  when platform.match(/darwin/)
-    yield if name_sym == :mac
-  else
-    raise 'unknown platform semantics'
-  end
-end
-
 class BlockPty
   attr_reader :controller, :device
 
