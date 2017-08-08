@@ -100,6 +100,8 @@ class BlockPty
         # to ensure that this is true.
       end
 
+      # Pop off the final line if it's a newline-terminated file
+      lines.pop if lines[-1] == ""
 
       lines
     end
