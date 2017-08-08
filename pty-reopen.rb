@@ -46,6 +46,7 @@ class BlockPty
         $stdin.reopen(orig_stdin)
         @orig_stdout = nil
         controller.close
+        device.close
 
         raise err unless err.nil?
       end
