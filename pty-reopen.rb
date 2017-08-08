@@ -6,11 +6,12 @@ args = ARGV.clone
 class BlockPty
   attr_reader :controller, :device
 
-  def initialize(controller, device, &block)
+  def initialize
+    controller, device = PTY.open
     @controller = controller
     @device = device
-    @block = block
     @orig_stdout = nil
+    @pid = nil
   end
 
   def real_puts(str)
@@ -21,71 +22,56 @@ class BlockPty
     end
   end
 
-  def call
-    err = nil
-    out = nil
+  def run(&block)
+    @pid = Process.fork do
+      err = nil
 
-    @orig_stdout = $stdout.clone
-    orig_stderr = $stderr.clone
-    orig_stdin = $stdin.clone
-    $stdout.reopen(device)
-    $stderr.reopen(device)
-    $stdin.reopen(device)
+      begin
+        @orig_stdout = $stdout.clone
+        orig_stderr = $stderr.clone
+        orig_stdin = $stdin.clone
+        $stdout.reopen(device)
+        $stderr.reopen(device)
+        $stdin.reopen(device)
 
-    begin
-      out = @block.call(self)
-    # With the pipes all fucked up, apparently Ruby won't actually exit on exceptions!
-    # Rescue _everything_ here, and we'll re-raise correctly in the ensure block once the pipes are
-    # back.
-    rescue Exception => e
-      err = e
+        out = block.call(self)
+      # With the pipes all fucked up, apparently Ruby won't actually exit on exceptions!
+      # Rescue _everything_ here, and we'll re-raise correctly in the ensure block once the pipes are
+      # back.
+      rescue Exception => e
+        err = e
+      ensure
+        $stdout.reopen(@orig_stdout)
+        $stderr.reopen(orig_stderr)
+        $stdin.reopen(orig_stdin)
+        @orig_stdout = nil
+        controller.close
+
+        raise err unless err.nil?
+      end
     end
-  ensure
-    $stdout.reopen(@orig_stdout)
-    $stderr.reopen(orig_stderr)
-    $stdin.reopen(orig_stdin)
-    @orig_stdout = nil
 
-    raise err unless err.nil?
-    return out
-  end
-
-  def close_device
     device.close
-  end
-
-  def close_controller
-    controller.close
+    @pid
   end
 
   def close
-    close_device
-    close_controller
+    controller.close
+    unless @pid.nil?
+      _, status = Process.wait2(@pid)
+      raise "PTY process exited with status #{status.to_i}" unless status.success?
+    end
   end
 
   class << self
-    def in_pty(&block)
-      controller, device = PTY.open
-      self.new(controller, device, &block)
-    end
-
     def get_lines(pty)
       lines = with_buffer do |lines|
         begin
-          pty.device.flush
-          pty.controller.flush
-          while output = pty.controller.read_nonblock(1024)
+          loop do
+            _, _, _ = IO.select([ pty.controller ])
+            output = pty.controller.read_nonblock(1024)
             buffer_output(lines, output)
           end
-        rescue IO::EAGAINWaitReadable => e
-          # We've hit the end of the stream
-          # Weirdly, closing the device first causes reads from the master to return nothing on macOS, and on linux, it
-          # appears that for inner PTYs IO.select combined with the slave closing first, but not the master, results in
-          # IO.select hanging forever.
-          #
-          # Closing both after (which we do, to work around these bugs) means the master never sees the EOF (since we
-          # never send one), so we have to assume that hitting the end of the stream means that no more data will come.
-          # We flush the device and controller before running this to try to ensure that this is true.
         end
       end
 
@@ -154,7 +140,9 @@ def run_command(cmd)
   system(cmd)
 end
 
-pty_block = BlockPty.in_pty do |pty_block|
+pty_block = BlockPty.new
+
+pty_block.run do
   puts "hi\n\n"
   run_command("echo 'echoed'")
   cmd = "cat ./ruby-fd-debug.rb"
@@ -164,11 +152,11 @@ pty_block = BlockPty.in_pty do |pty_block|
   puts "running..."
 
   # nested!!!
-  inner_pty = BlockPty.in_pty do
+  inner_pty = BlockPty.new
+  inner_pty.run do
     system(cmd)
   end
 
-  inner_pty.()
   puts "ran successfully. printing...\n\n"
   lines = BlockPty.get_lines(inner_pty)
   inner_pty.close
@@ -186,7 +174,6 @@ pty_block = BlockPty.in_pty do |pty_block|
   puts "found input: #{input}"
 end
 
-pty_block.()
 lines = BlockPty.get_lines(pty_block)
 pty_block.close
 
