@@ -145,7 +145,7 @@ pty_block = BlockPty.new
 pty_block.run do
   puts "hi\n\n"
   run_command("echo 'echoed'")
-  cmd = "cat ./ruby-fd-debug.rb"
+  cmd = "cat #{__FILE__}"
 
   puts "\nlet's run some shit in an inner pty and do some crazy formatting. we will run:"
   print_command(cmd)
