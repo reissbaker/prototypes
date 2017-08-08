@@ -167,11 +167,12 @@ pty_block = BlockPty.in_pty do |pty_block|
   lines = BlockPty.get_lines(inner_pty)
   inner_pty.close
 
+  line_number_justification = Math.log10(lines.length).ceil
   lines.each_with_index do |line, index|
-    puts "    #{(index + 1).to_s.rjust(Math.log10(lines.length).ceil)}: #{line}"
+    puts "    #{(index + 1).to_s.rjust(line_number_justification)}: #{line}"
   end
 
-  puts "\n\nlet's write some fake input to the controller and read it back from $stdin"
+  puts "\nlet's write some fake input to the controller and read it back from $stdin"
 
   enqueue_stdin(pty_block, "yo")
 
