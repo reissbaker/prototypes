@@ -200,7 +200,6 @@ VERT_MARGIN = 1
 MAX_WIDTH = 60
 MIN_WIDTH = console_width - (HORIZ_MARGIN * 2)
 WIDTH = [ MAX_WIDTH, MIN_WIDTH ].min
-HEIGHT = args.first.to_i
 CORNER_BORDER_CHAR = "•"
 TL_CHAR = "\u250C"
 TR_CHAR = "\u2510"
@@ -211,23 +210,8 @@ HORIZ_BORDER_CHAR = "\u2502"
 BORDER_HORIZ_PADDING = 1
 
 INNER_LINE_WIDTH = WIDTH - (HORIZ_BORDER_CHAR.length * 2) - (HORIZ_MARGIN * 2) - (BORDER_HORIZ_PADDING * 2) + 1
-
-TITLE = "PTY SCREEN #{INNER_LINE_WIDTH}x#{HEIGHT}"
-
 LEFT_BORDER = (" " * HORIZ_MARGIN) + HORIZ_BORDER_CHAR + (" " * BORDER_HORIZ_PADDING)
 RIGHT_BORDER = (" " * BORDER_HORIZ_PADDING) + HORIZ_BORDER_CHAR
-FRAME_BOTTOM = (" " * HORIZ_MARGIN) + BL_CHAR + (VERT_BORDER_CHAR * (WIDTH - 2)) + BR_CHAR
-FRAME_TOP_LEFT = TL_CHAR + (VERT_BORDER_CHAR * (((WIDTH - TITLE.length - 2) / 2) - 2))
-FRAME_TOP_RIGHT = (VERT_BORDER_CHAR * ((WIDTH - FRAME_TOP_LEFT.length - TITLE.length - 2) - 3)) + TR_CHAR
-
-COLORIZED_TITLE = "\e[93m#{TITLE}\e[0m"
-
-def vert_margin
-  (0...VERT_MARGIN).each { print "\n" }
-end
-
-vert_margin
-puts "#{" " * HORIZ_MARGIN}#{FRAME_TOP_LEFT}\u2524 #{COLORIZED_TITLE} \u251c#{FRAME_TOP_RIGHT}"
 
 buffer = []
 
@@ -253,6 +237,8 @@ lines.each do |output|
   end
 end
 
+HEIGHT = args.first.nil? ? buffer.length : args.first.to_i
+
 start_offset = [ 0, buffer.length - HEIGHT].max
 screen = buffer[start_offset..-1]
 if screen.length < HEIGHT
@@ -260,6 +246,21 @@ if screen.length < HEIGHT
     stage(screen, "")
   end
 end
+
+TITLE = "PTY SCREEN #{INNER_LINE_WIDTH}x#{HEIGHT}"
+
+FRAME_BOTTOM = (" " * HORIZ_MARGIN) + BL_CHAR + (VERT_BORDER_CHAR * (WIDTH - 2)) + BR_CHAR
+FRAME_TOP_LEFT = TL_CHAR + (VERT_BORDER_CHAR * (((WIDTH - TITLE.length - 2) / 2) - 2))
+FRAME_TOP_RIGHT = (VERT_BORDER_CHAR * ((WIDTH - FRAME_TOP_LEFT.length - TITLE.length - 2) - 3)) + TR_CHAR
+
+COLORIZED_TITLE = "\e[93m#{TITLE}\e[0m"
+
+def vert_margin
+  (0...VERT_MARGIN).each { print "\n" }
+end
+
+vert_margin
+puts "#{" " * HORIZ_MARGIN}#{FRAME_TOP_LEFT}\u2524 #{COLORIZED_TITLE} \u251c#{FRAME_TOP_RIGHT}"
 puts screen.join("\n")
 puts FRAME_BOTTOM
 vert_margin
