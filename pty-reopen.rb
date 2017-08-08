@@ -93,11 +93,13 @@ class BlockPty
         end
       rescue IO::EAGAINWaitReadable => e
         # We've hit the end of the stream
-        # Weirdly, closing the device first causes reads from the master to return nothing
-        # Closing both after (which we do, to work around this bug) means the master never sees
-        # the EOF (since we never send one), so we have to assume that hitting the end of the
-        # stream means that no more data will come. We flush the device before running this to try
-        # to ensure that this is true.
+        # Weirdly, closing the device first causes reads from the master to return nothing on macOS, and on linux, it
+        # appears that for inner PTYs IO.select combined with the slave closing first, but not the master, results in
+        # IO.select hanging forever.
+        #
+        # Closing both after (which we do, to work around these bugs) means the master never sees the EOF (since we
+        # never send one), so we have to assume that hitting the end of the stream means that no more data will come.
+        # We flush the device and controller before running this to try to ensure that this is true.
       end
 
       # Pop off the final line if it's a newline-terminated file
