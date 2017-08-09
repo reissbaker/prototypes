@@ -21,12 +21,12 @@ BORDER_HORIZ_PADDING = 1
 INNER_LINE_WIDTH = WIDTH - (HORIZ_BORDER_CHAR.length * 2) - (HORIZ_MARGIN * 2) - (BORDER_HORIZ_PADDING * 2) + 1
 
 class BlockPty
-  attr_reader :controller, :device
+  attr_reader :controller, :terminal
 
   def initialize
-    controller, device = PTY.open
+    controller, terminal = PTY.open
     @controller = controller
-    @device = device
+    @terminal = terminal
     @orig_stdout = nil
     @pid = nil
   end
@@ -47,9 +47,9 @@ class BlockPty
         @orig_stdout = $stdout.clone
         orig_stderr = $stderr.clone
         orig_stdin = $stdin.clone
-        $stdout.reopen(device)
-        $stderr.reopen(device)
-        $stdin.reopen(device)
+        $stdout.reopen(terminal)
+        $stderr.reopen(terminal)
+        $stdin.reopen(terminal)
 
         out = block.call(self)
       # With the pipes all fucked up, apparently Ruby won't actually exit on exceptions!
@@ -63,13 +63,13 @@ class BlockPty
         $stdin.reopen(orig_stdin)
         @orig_stdout = nil
         controller.close
-        device.close
+        terminal.close
 
         raise err unless err.nil?
       end
     end
 
-    device.close
+    terminal.close
     @pid
   end
 
