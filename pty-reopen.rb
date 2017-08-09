@@ -3,6 +3,23 @@ require 'io/console'
 
 args = ARGV.clone
 
+_, console_width = IO.console.winsize
+HORIZ_MARGIN = 1
+VERT_MARGIN = 1
+MAX_WIDTH = 120
+MIN_WIDTH = console_width - (HORIZ_MARGIN * 2)
+WIDTH = [ MAX_WIDTH, MIN_WIDTH ].min
+CORNER_BORDER_CHAR = "•"
+TL_CHAR = "\u250C"
+TR_CHAR = "\u2510"
+BL_CHAR = "\u2514"
+BR_CHAR = "\u2518"
+VERT_BORDER_CHAR = "\u2500"
+HORIZ_BORDER_CHAR = "\u2502"
+BORDER_HORIZ_PADDING = 1
+
+INNER_LINE_WIDTH = WIDTH - (HORIZ_BORDER_CHAR.length * 2) - (HORIZ_MARGIN * 2) - (BORDER_HORIZ_PADDING * 2) + 1
+
 class BlockPty
   attr_reader :controller, :device
 
@@ -163,9 +180,28 @@ pty_block.run do
   inner_pty.close
 
   line_number_justification = Math.log10(lines.length).ceil
+  screen = []
+  indent = "    "
+  max_line_length = INNER_LINE_WIDTH - line_number_justification - indent.length - 2
+
   lines.each_with_index do |line, index|
-    puts "    #{(index + 1).to_s.rjust(line_number_justification)}: #{line}"
+    start_index = 0
+    remaining = line.length
+    chunk = [ remaining, max_line_length ].min
+    output = line[start_index...chunk]
+    start_index += chunk
+    screen << "#{indent}#{(index + 1).to_s.rjust(line_number_justification)}: #{output}"
+    remaining -= chunk
+    while remaining > 0
+      chunk = [ remaining, max_line_length ].min
+      output = line[start_index...(start_index + chunk)]
+      start_index += chunk
+      screen << "#{indent}#{' '.rjust(line_number_justification)}  #{output}"
+      remaining -= chunk
+    end
   end
+
+  puts screen.join("\n")
 
   puts "\nlet's write some fake input to the controller and read it back from $stdin"
 
@@ -179,22 +215,6 @@ lines = BlockPty.get_lines(pty_block)
 pty_block.close
 
 # Got all the PTY data! Everything from here on down is UI rendering code
-_, console_width = IO.console.winsize
-HORIZ_MARGIN = 1
-VERT_MARGIN = 1
-MAX_WIDTH = 60
-MIN_WIDTH = console_width - (HORIZ_MARGIN * 2)
-WIDTH = [ MAX_WIDTH, MIN_WIDTH ].min
-CORNER_BORDER_CHAR = "•"
-TL_CHAR = "\u250C"
-TR_CHAR = "\u2510"
-BL_CHAR = "\u2514"
-BR_CHAR = "\u2518"
-VERT_BORDER_CHAR = "\u2500"
-HORIZ_BORDER_CHAR = "\u2502"
-BORDER_HORIZ_PADDING = 1
-
-INNER_LINE_WIDTH = WIDTH - (HORIZ_BORDER_CHAR.length * 2) - (HORIZ_MARGIN * 2) - (BORDER_HORIZ_PADDING * 2) + 1
 LEFT_BORDER = (" " * HORIZ_MARGIN) + HORIZ_BORDER_CHAR + (" " * BORDER_HORIZ_PADDING)
 RIGHT_BORDER = (" " * BORDER_HORIZ_PADDING) + HORIZ_BORDER_CHAR
 
